@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LifeUp - Jeu de développement personnel</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <!-- Add Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-firestore-compat.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -156,6 +159,23 @@
         .profile-email {
             font-size: 0.9rem;
             color: #94a3b8;
+        }
+        
+        /* Loading spinner */
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -334,16 +354,20 @@
                     <span class="lang-en hidden">Sign in with Google to start your adventure</span>
                 </p>
                 
-                <div id="g_id_signin" class="g_id_signin"></div>
+                <button id="googleSignInBtn" class="w-full px-4 py-3 rounded-full bg-white text-gray-800 font-medium flex items-center justify-center hover:bg-gray-100 transition">
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg" alt="Google logo" class="w-5 h-5 mr-2">
+                    <span class="lang-fr">Continuer avec Google</span>
+                    <span class="lang-en hidden">Continue with Google</span>
+                </button>
                 
-                <p class="text-xs text-center text-slate-500">
+                <p class="text-xs text-center text-slate-500 mt-4">
                     <span class="lang-fr">En continuant, vous acceptez nos conditions d'utilisation et notre politique de confidentialité.</span>
                     <span class="lang-en hidden">By continuing, you agree to our Terms of Service and Privacy Policy.</span>
                 </p>
             </div>
             
             <div id="pseudoStep" class="hidden">
-                <div id="profileInfo" class="profile-info hidden">
+                <div id="profileInfo" class="profile-info">
                     <img id="user-pic" class="profile-pic" src="" alt="Photo de profil">
                     <div class="profile-details">
                         <div id="user-name" class="profile-name"></div>
@@ -361,26 +385,23 @@
                         <span class="lang-fr">Pseudo unique</span>
                         <span class="lang-en hidden">Unique username</span>
                     </label>
-                    <input type="text" id="pseudoInput" class="w-full px-4 py-2 rounded-lg bg-slate-700 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <input type="text" id="pseudoInput" class="w-full px-4 py-2 rounded-lg bg-slate-700 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Votre pseudo">
                     <p id="pseudoError" class="text-red-400 text-sm mt-1 hidden">
                         <span class="lang-fr">Ce pseudo est déjà pris</span>
                         <span class="lang-en hidden">This username is already taken</span>
                     </p>
                 </div>
                 
-                <button id="confirmPseudoBtn" class="w-full py-3 rounded-full bg-blue-500 hover:bg-blue-600 font-bold transition">
-                    <span class="lang-fr">Confirmer</span>
-                    <span class="lang-en hidden">Confirm</span>
+                <button id="confirmPseudoBtn" class="w-full py-3 rounded-full bg-blue-500 hover:bg-blue-600 font-bold transition flex items-center justify-center">
+                    <span id="confirmText">
+                        <span class="lang-fr">Confirmer</span>
+                        <span class="lang-en hidden">Confirm</span>
+                    </span>
+                    <span id="confirmSpinner" class="spinner hidden"></span>
                 </button>
             </div>
         </div>
     </div>
-
-    <!-- Footer -->
-    <footer class="container mx-auto px-4 py-6 text-center text-slate-500 text-sm">
-        <p class="lang-fr">© 2023 LifeUp - Tous droits réservés</p>
-        <p class="lang-en hidden">© 2023 LifeUp - All rights reserved</p>
-    </footer>
 
     <script>
         // Initialiser les éléments du DOM
@@ -404,63 +425,131 @@
         const volumeValue = document.getElementById('volumeValue');
         const saveSettingsBtn = document.getElementById('saveSettingsBtn');
         const profileInfo = document.getElementById('profileInfo');
+        const googleSignInBtn = document.getElementById('googleSignInBtn');
+        const confirmText = document.getElementById('confirmText');
+        const confirmSpinner = document.getElementById('confirmSpinner');
         
-        // Google Auth Response Handler
-        function handleCredentialResponse(response) {
-            // Decode the JWT response
-            const responsePayload = parseJwt(response.credential);
-            
-            // Display user info
-            document.getElementById("user-pic").src = responsePayload.picture;
-            document.getElementById("user-name").textContent = responsePayload.name;
-            document.getElementById("user-email").textContent = responsePayload.email;
+        // Initialize Firebase
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+        
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const provider = new firebase.auth.GoogleAuthProvider();
+        
+        // Référence à la collection des utilisateurs
+        const usersRef = db.collection('users');
+        
+        // Google Sign-in Handler
+        async function signInWithGoogle() {
+            try {
+                const result = await auth.signInWithPopup(provider);
+                const user = result.user;
+                
+                // Vérifier si l'utilisateur existe déjà dans Firestore
+                const userDoc = await usersRef.doc(user.uid).get();
+                
+                if (userDoc.exists) {
+                    // Utilisateur existant - rediriger vers le jeu
+                    redirectToGame();
+                } else {
+                    // Nouvel utilisateur - demander un pseudo
+                    displayUserProfile(user);
+                }
+                
+            } catch (error) {
+                console.error("Authentication error:", error);
+                showError(document.documentElement.lang === 'fr' ? 
+                    "Erreur d'authentification: " + error.message : 
+                    "Authentication error: " + error.message);
+            }
+        }
+        
+        // Afficher le profil utilisateur dans le modal
+        function displayUserProfile(user) {
+            document.getElementById("user-pic").src = user.photoURL;
+            document.getElementById("user-name").textContent = user.displayName;
+            document.getElementById("user-email").textContent = user.email;
             profileInfo.classList.remove("hidden");
             
-            // Show username step
+            // Passer à l'étape du pseudo
             authStep.classList.add("hidden");
             pseudoStep.classList.remove("hidden");
-            
-            // Store user data in localStorage
-            localStorage.setItem('googleUser', JSON.stringify({
-                name: responsePayload.name,
-                email: responsePayload.email,
-                picture: responsePayload.picture,
-                sub: responsePayload.sub
-            }));
         }
         
-        // Helper function to parse JWT
-        function parseJwt(token) {
-            const base64Url = token.split('.')[1];
-            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-            }).join(''));
+        // Rediriger vers la page de jeu
+        function redirectToGame() {
+            // Stocker l'état de connexion
+            localStorage.setItem('userLoggedIn', 'true');
             
-            return JSON.parse(jsonPayload);
+            // Rediriger vers le jeu
+            window.location.href = 'game.html';
         }
         
-        // Initialize Google Auth
-        function initGoogleAuth() {
-            google.accounts.id.initialize({
-                client_id: "944469105005-i40nau1ghf55gdpbldfq0nhkroev700h.apps.googleusercontent.com",
-                callback: handleCredentialResponse
-            });
-            
-            google.accounts.id.renderButton(
-                document.getElementById("g_id_signin"),
-                { 
-                    theme: "outline", 
-                    size: "large",
-                    text: "continue_with",
-                    shape: "pill",
-                    width: "300"
+        // Vérifier la disponibilité d'un pseudo
+        async function isUsernameAvailable(username) {
+            const snapshot = await usersRef.where('username', '==', username).get();
+            return snapshot.empty;
+        }
+        
+        // Créer un nouvel utilisateur dans Firestore
+        async function createNewUser(user, username) {
+            // Créer l'objet utilisateur
+            const userData = {
+                uid: user.uid,
+                email: user.email,
+                displayName: user.displayName,
+                photoURL: user.photoURL,
+                username: username,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                lastLogin: firebase.firestore.FieldValue.serverTimestamp(),
+                gameData: {
+                    level: 1,
+                    xp: 0,
+                    nextLevelXP: 100,
+                    stats: {
+                        strength: 5,
+                        intelligence: 5,
+                        money: 100,
+                        aura: 5,
+                        karma: 5
+                    },
+                    completedTasks: [],
+                    activeGoals: []
                 }
-            );
+            };
             
-            // Also display the One Tap dialog
-            google.accounts.id.prompt();
+            // Sauvegarder dans Firestore
+            await usersRef.doc(user.uid).set(userData);
         }
+        
+        // Afficher un message d'erreur
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'fixed top-4 right-4 px-4 py-2 bg-red-500 text-white rounded-lg shadow-lg';
+            errorDiv.textContent = message;
+            document.body.appendChild(errorDiv);
+            
+            setTimeout(() => {
+                errorDiv.remove();
+            }, 5000);
+        }
+        
+        // Check auth state
+        auth.onAuthStateChanged((user) => {
+            if (user) {
+                // User est connecté
+                console.log("User is signed in:", user.email);
+            }
+        });
         
         // Load settings
         function loadSettings() {
@@ -541,20 +630,14 @@
         playBtn.addEventListener('click', () => {
             playModal.classList.add('active');
             
-            // Check if user is already logged in
-            const googleUser = localStorage.getItem('googleUser');
-            if (googleUser) {
-                const userData = JSON.parse(googleUser);
-                document.getElementById("user-pic").src = userData.picture;
-                document.getElementById("user-name").textContent = userData.name;
-                document.getElementById("user-email").textContent = userData.email;
-                profileInfo.classList.remove("hidden");
-                authStep.classList.add("hidden");
-                pseudoStep.classList.remove("hidden");
+            // Vérifier si l'utilisateur est déjà connecté
+            const user = auth.currentUser;
+            if (user) {
+                redirectToGame();
             }
         });
         
-        confirmPseudoBtn.addEventListener('click', () => {
+        confirmPseudoBtn.addEventListener('click', async () => {
             const pseudo = pseudoInput.value.trim();
             
             if(pseudo.length < 3) {
@@ -565,19 +648,41 @@
                 return;
             }
             
-            // Simuler la vérification du pseudo (à remplacer par un appel API)
-            const isPseudoTaken = Math.random() > 0.7; // 30% de chance que le pseudo soit pris (pour la démo)
+            // Afficher le spinner
+            confirmText.classList.add('hidden');
+            confirmSpinner.classList.remove('hidden');
+            confirmPseudoBtn.disabled = true;
             
-            if(isPseudoTaken) {
-                pseudoError.classList.remove('hidden');
-            } else {
-                pseudoError.classList.add('hidden');
+            try {
+                // Vérifier si le pseudo est disponible
+                const isAvailable = await isUsernameAvailable(pseudo);
                 
-                // Store username in localStorage
-                localStorage.setItem('username', pseudo);
-                
-                // Rediriger vers le jeu
-                window.location.href = 'https://de4aultnull.github.io/lifeup/game';
+                if(!isAvailable) {
+                    pseudoError.classList.remove('hidden');
+                    pseudoError.textContent = document.documentElement.lang === 'fr' ? 
+                        'Ce pseudo est déjà pris' : 
+                        'This username is already taken';
+                } else {
+                    pseudoError.classList.add('hidden');
+                    
+                    // Créer un nouvel utilisateur dans Firestore
+                    const user = auth.currentUser;
+                    await createNewUser(user, pseudo);
+                    
+                    // Rediriger vers le jeu
+                    redirectToGame();
+                    return;
+                }
+            } catch (error) {
+                console.error("Error creating user:", error);
+                showError(document.documentElement.lang === 'fr' ? 
+                    "Erreur lors de la création du compte: " + error.message : 
+                    "Account creation error: " + error.message);
+            } finally {
+                // Cacher le spinner
+                confirmText.classList.remove('hidden');
+                confirmSpinner.classList.add('hidden');
+                confirmPseudoBtn.disabled = false;
             }
         });
         
@@ -619,21 +724,15 @@
         // Charger les paramètres au démarrage
         loadSettings();
         
-        // Initialize Google Auth when the API is loaded
-        window.onload = function() {
-            // Check if Google API is loaded
-            if (typeof google !== 'undefined') {
-                initGoogleAuth();
-            } else {
-                // If not, wait for it
-                const checkGoogle = setInterval(() => {
-                    if (typeof google !== 'undefined') {
-                        clearInterval(checkGoogle);
-                        initGoogleAuth();
-                    }
-                }, 100);
+        // Add Google Sign-in button event listener
+        googleSignInBtn.addEventListener('click', signInWithGoogle);
+        
+        // Vérifier si l'utilisateur est déjà connecté au chargement
+        auth.onAuthStateChanged((user) => {
+            if (user && localStorage.getItem('userLoggedIn') === 'true') {
+                redirectToGame();
             }
-        };
+        });
     </script>
 </body>
 </html>
